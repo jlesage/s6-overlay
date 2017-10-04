@@ -132,7 +132,43 @@ foreground
           if { s6-test -d /var/run/s6/etc/services.d/${i} }
           s6-hiercopy /var/run/s6/etc/services.d/${i} /var/run/s6/services/${i}
         }
+        # This env decides if service dependencies is enabled.
+        backtick -D 0 -n S6_SERVICE_DEPS { printcontenv S6_SERVICE_DEPS }
+        importas -u S6_SERVICE_DEPS S6_SERVICE_DEPS
+        # If service dependencies is enabled, mark all services as down.
+        if
+        {
+          if -t { s6-test ${S6_SERVICE_DEPS} -ne 0 }
+          pipeline { s6-ls -0 -- /var/run/s6/etc/services.d }
+          forstdin -0 -p -- i
+          importas -u i i
+          if
+          {
+            if -t -n { pipeline { s6-echo -- "${i}" } s6-grep -q "^s6-*" }
+            if { s6-test -d /var/run/s6/etc/services.d/${i} }
+            s6-touch /var/run/s6/services/${i}/down
+          }
+        }
         if { s6-svscanctl -a /var/run/s6/services }
+        # If service dependencies is enabled, start services one by one, in
+        # order.
+        if
+        {
+          if -t { s6-test ${S6_SERVICE_DEPS} -ne 0 }
+          backtick -D 5000 -n S6_SERVICE_DEPS_WAIT_FOR_SERVICE_MAXTIME { printcontenv S6_SERVICE_DEPS_WAIT_FOR_SERVICE_MAXTIME }
+          importas -u S6_SERVICE_DEPS_WAIT_FOR_SERVICE_MAXTIME S6_SERVICE_DEPS_WAIT_FOR_SERVICE_MAXTIME
+          pipeline { sv-getdeps -0 /var/run/s6/services }
+          forstdin -0 -- i
+          importas -u i i
+          foreground { s6-echo -- "[services.d] starting ${i}..." }
+          if { s6-rmrf /var/run/s6/services/${i}/down }
+          if { s6-svc -u /var/run/s6/services/${i} }
+          ifelse { s6-test -f /var/run/s6/services/${i}/notification-fd }
+          {
+            s6-svwait -t ${S6_SERVICE_DEPS_WAIT_FOR_SERVICE_MAXTIME} -U /var/run/s6/services/${i}
+          }
+          s6-svwait -t ${S6_SERVICE_DEPS_WAIT_FOR_SERVICE_MAXTIME} -u /var/run/s6/services/${i}
+        }
         if
         {
           # This envs decide if CMD should wait until services are up
@@ -177,7 +213,7 @@ foreground
   foreground { redirfd -w 1 /var/run/s6/env-stage3/S6_CMD_EXITED s6-echo -n -- "${?}" }
 
   # Stop supervision tree
-  foreground { s6-svscanctl -t /var/run/s6/services }
+  foreground { /etc/s6/services/.s6-svscan/SIGTERM }
 
   # Race condition here, but it's ok: the sync in stage 3 takes ages,
   # and if we get killed by the SIGTERM instead of the SIGKILL, meh, who cares.
@@ -192,6 +228,6 @@ ifelse { s6-test ${S6_BEHAVIOUR_IF_STAGE2_FAILS} -ne 1 }
 {
   # Stop supervision tree (if it wasn't already due to CMD execution)
   if { s6-test ! -f /var/run/s6/env-stage3/S6_CMD_EXITED }
-  s6-svscanctl -t /var/run/s6/services
+  /etc/s6/services/.s6-svscan/SIGTERM
 }
 s6-echo -- "\n!!!!!\n init-stage2 failed.\n!!!!!"

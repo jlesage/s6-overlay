@@ -1,0 +1,23 @@
+#!/bin/execlineb -P
+
+# Set an indication that the container is shutting down.
+foreground { redirfd -w 1 /var/run/s6/container_environment/CONTAINER_SHUTTING_DOWN s6-echo -n -- "1" }
+
+# If service dependencies is enabled, stop services one by one, in reverse
+# order.
+if
+{
+  backtick -D 0 -n S6_SERVICE_DEPS { printcontenv S6_SERVICE_DEPS }
+  importas -u S6_SERVICE_DEPS S6_SERVICE_DEPS
+  if -t { s6-test ${S6_SERVICE_DEPS} -ne 0 }
+  pipeline { sv-getdeps -0 -r /var/run/s6/services }
+  forstdin -0 -- i
+  importas -u i i
+  foreground { s6-echo -- "[services.d] stopping ${i}..." }
+  ifelse { s6-svok /var/run/s6/services/${i} }
+  { s6-svc -wD -d /var/run/s6/services/${i} }
+  s6-touch /var/run/s6/services/${i}/down
+}
+
+# Terminate execution tree.
+s6-svscanctl -h /var/run/s6/services
