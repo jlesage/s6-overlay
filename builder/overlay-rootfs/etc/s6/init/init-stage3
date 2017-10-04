@@ -3,6 +3,21 @@
 # This is the shutdown script, running as process 1.
 cd /
 
+# Set an indication that the container is shutting down.
+foreground { redirfd -w 1 /var/run/s6/container_environment/CONTAINER_SHUTTING_DOWN s6-echo -n -- "1" }
+
+# Stop services, in reverse order.
+foreground { s6-echo -- "[services.d] stopping services" }
+foreground
+{
+  pipeline { sv-getdeps -0 -r /var/run/s6/services }
+  forstdin -0 -- i
+  importas -u i i
+  foreground { s6-echo -- "[services.d] stopping ${i}..." }
+  if { s6-svok /var/run/s6/services/${i} }
+  s6-svc -wD -d -x /var/run/s6/services/${i}
+}
+
 # Merge environments from our custom stage into current context
 s6-envdir -I /var/run/s6/env-stage3
 
